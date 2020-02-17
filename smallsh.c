@@ -13,6 +13,7 @@ void exitShell();
 void changeDir(char*);
 void getStatus(int, int);
 void execute(char**);
+char* replacePid(char*);
 
 void main()
 {
@@ -48,6 +49,10 @@ void main()
 
 	//stores user input
         userInput = getUserInput();
+
+	//handles COMMENTS
+	if (*userInput == '#')
+	    continue;
         
 	//tokenizes input to get commands, stores in array position 0
         token = strtok(userInput, " \n");	
@@ -89,10 +94,11 @@ void main()
 			//perform redirection
 			while (token != NULL)
 			{
-
+                            //checks for stdout redirect
 		            if (strcmp(token, ">") == 0)
 			    {
 		                token = strtok(NULL, " \n");
+				token = replacePid(token);
 
 				int targetFD = open(token, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 
@@ -111,9 +117,11 @@ void main()
 				    
 				}
 			    }
+			    //checks for stdin redirect
 		            else if (strcmp(token, "<") == 0)	
 			    {
 		                token = strtok(NULL, " \n");
+				token = replacePid(token);
 
 				int sourceFD = open(token, O_RDONLY);
 
@@ -131,6 +139,7 @@ void main()
 				    }	
 				}
 			    }
+			    //looks for more operators/commands
 			    token = strtok(NULL, " \n");
 			}
 			
@@ -177,8 +186,8 @@ char* getUserInput()
     {
         clearerr(stdin);
     }
-
-    return inputBuffer;
+    char* pidReplace = replacePid(inputBuffer);
+    return pidReplace;
 
 }
 
@@ -233,8 +242,20 @@ void execute(char** argv)
     }
 }
 
-char* replacePID(char* text)
+char* replacePid(char* text)
 {
-    char buffer[255];
+    pid_t currentPid = getpid();
+    int pid = (int) currentPid;
+
+    static char buffer[4096];
+    char *location;
+    if (!(location = strstr(text, "$$")))
+        return text;
+
+    strncpy(buffer, text, location - text);
+    buffer[location - text] = '\0';
+    sprintf(buffer + (location - text), "%d%s", pid, location + 2);
+
+    return buffer;
 
 }
