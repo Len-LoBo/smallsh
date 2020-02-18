@@ -24,6 +24,7 @@ void main()
 
     // string for storing user input and tokenizing
     char* userInput;
+    int lastCharIndex;
     char* token;
 
     //built in commands
@@ -34,6 +35,7 @@ void main()
     //prints prompt to screen
     while (1)
     {
+	pid_t childPid;
         	
 	char* args[513];
 	int argCounter = 0;
@@ -49,6 +51,7 @@ void main()
 
 	//stores user input
         userInput = getUserInput();
+        lastCharIndex = strlen(userInput) - 2; 
 
 	//handles COMMENTS
 	if (*userInput == '#')
@@ -60,7 +63,10 @@ void main()
         argCounter++;	
 	
 	//stores remaining arguments in argument array
-	while ((token = strtok(NULL, " \n")) != NULL && strcmp(token, "<") != 0 && strcmp(token, ">") != 0) 
+	while ((token = strtok(NULL, " \n")) != NULL 
+			&& strcmp(token, "<") != 0 
+			&& strcmp(token, ">") != 0
+			&& strcmp(token, "&") != 0) 
 	{ 
             args[argCounter] = token;
 	    argCounter++;
@@ -92,6 +98,46 @@ void main()
 	        case -1: { perror("Process fork() failed!\n"); }	
 	        case 0: {
 			//perform redirection
+			//redirection for BG process with no user specified redirection
+			if (userInput[lastCharIndex] == '&')
+			{
+			    //redirect stdout
+			    int targetFD = open("/dev/null", O_WRONLY, 0644);
+			    if (targetFD == -1)
+			    {
+			        perror("open()");
+				exit(1);
+			    }
+			    else 
+			    {
+			        int result = dup2(targetFD, 1);
+				if (result == -1)
+				{
+			            perror("dup2_stdout");
+				    exit(2);
+				}
+			    }
+			    //redirect stdin
+			    int sourceFD = open("/dev/null", O_RDONLY);
+
+				if (sourceFD == -1) 
+				{ 
+				    perror("open()"); 
+				    exit(1);
+				}
+				
+				else 
+			        {
+			            int result = dup2(sourceFD, 0);
+			            if (result == -1) { 
+				        perror("dup2_stdin"); 
+					exit(2);
+				    }	
+				}
+
+			}
+
+			//perform user input reditrection
 			while (token != NULL)
 			{
                             //checks for stdout redirect
@@ -110,7 +156,8 @@ void main()
 				else
 				{
 				    int result = dup2(targetFD, 1);
-				    if (result == -1) { 
+				    if (result == -1) 
+				    { 
 			                perror("dup2_stdout"); 
 					exit(2);
 				    }
@@ -148,17 +195,39 @@ void main()
 			perror("Exec failure");
 	        }
 	        default: {
-	                //waits for child process to terminate
-	                pid_t childPid = waitpid(spawnPid, &childExitMethod, 0);
+	                //BG Process
+		        if (userInput[lastCharIndex] == '&')
+			{
+			    //print pid of child process
+			    printf("background pid is %d\n", spawnPid); 
+		            //doesn't wait for termination
+			    childPid = waitpid(spawnPid, &childExitMethod, WNOHANG);
+			}
+			//FG Process
+			else
+			{
+	                    //waits for child process to terminate
+	                    childPid = waitpid(spawnPid, &childExitMethod, 0);
+			}
+			//checks for wait failure
 			if (childPid == -1)
 			{
 			    perror("wait failed");
 			}
+			//check if child process terminated normally
 	                if (WIFEXITED(childExitMethod))
 			{
-		            lastExitStatus = WEXITSTATUS(childExitMethod);
-			    exitType = 0;
+		                lastExitStatus = WEXITSTATUS(childExitMethod);
+			        exitType = 0;
 			}
+
+			//checks for signal termination of child
+			if (WIFSIGNALED(childExitMethod) != 0)
+			{
+			    lastExitStatus = WTERMSIG(childExitMethod);
+			    exitType = 1;
+			}
+			    
 	        }
 	    }
 	}
@@ -227,7 +296,7 @@ void getStatus(int lastExitStatus, int exitType)
     }
     else
     {
-        printf("exited by signal");
+        printf("terminated by signal %d", lastExitStatus);
 	fflush(stdout);
     }
 }
