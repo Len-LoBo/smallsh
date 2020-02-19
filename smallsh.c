@@ -6,21 +6,38 @@
 #include <signal.h>
 #include <string.h>
 #include <fcntl.h>
+#include <math.h>
+#include "dynArray.h"
 
-void prompt();
-char* getUserInput();
+char* prompt();
 void exitShell();
 void changeDir(char*);
-void getStatus(int, int);
+void getStatus(int);
 void execute(char**);
 char* replacePid(char*);
+void catchIgn();
 
 void main()
 {
     pid_t spawnPid = -5;
     int childExitMethod = -5;
-    int lastExitStatus = 0;
-    int exitType = 0;
+
+    //signal handlers
+    struct sigaction INT_action = {0}, SIGSTP_action = {0};
+
+    //sig int
+    INT_action.sa_handler = SIG_IGN; 
+    sigfillset(&INT_action.sa_mask);
+    INT_action.sa_flags = 0;
+    sigaction(SIGINT, &INT_action, NULL);
+
+    //sig stp
+    SIGSTP_action.sa_handler = catchSTP;
+    sigfillset(&SIGSTOP_action.sa_mask);
+    SIGSTOP_action.sa_flags = 0;
+    
+ 
+    DynArr* pidArray = newDynArr(5);
 
     // string for storing user input and tokenizing
     char* userInput;
@@ -39,18 +56,29 @@ void main()
         	
 	char* args[513];
 	int argCounter = 0;
-
+	
 	//initializes args array pointers to NULL
 	for (int i = 0; i < 513; i++)
 	{
 	    args[i] = NULL;
 	}
-	
-	//prompts user for command line input
-        prompt(); 
-
+       
+	for (int i = 0; i < sizeDynArr(pidArray); i++)
+	{
+	    if ((childPid = waitpid(getDynArr(pidArray, i), &childExitMethod, WNOHANG)) > 0) 
+	    {
+                removeAtDynArr(pidArray, i);
+		printf("background pid %d is done: ", childPid);
+		getStatus(childExitMethod);
+	    }	    
+	}
+	//
 	//stores user input
-        userInput = getUserInput();
+        userInput = prompt();
+        userInput = replacePid(userInput);
+    
+
+	if (strcmp(userInput, "") == 0) continue;
         lastCharIndex = strlen(userInput) - 2; 
 
 	//handles COMMENTS
@@ -85,7 +113,7 @@ void main()
  	}
 	else if (strcmp(*args, statusText) == 0)
 	{
-	    getStatus(lastExitStatus, exitType);
+	    getStatus(childExitMethod);
 	}
 	// if not build in command
 	else 
@@ -97,10 +125,15 @@ void main()
 	    {
 	        case -1: { perror("Process fork() failed!\n"); }	
 	        case 0: {
+                        INT_action.sa_handler = SIG_DFL;
+                        sigaction(SIGINT, &INT_action, NULL);
+
 			//perform redirection
 			//redirection for BG process with no user specified redirection
 			if (userInput[lastCharIndex] == '&')
 			{
+			    INT_action.sa_handler = SIG_IGN;
+			    sigaction(SIGINT, &INT_action, NULL);
 			    //redirect stdout
 			    int targetFD = open("/dev/null", O_WRONLY, 0644);
 			    if (targetFD == -1)
@@ -120,20 +153,21 @@ void main()
 			    //redirect stdin
 			    int sourceFD = open("/dev/null", O_RDONLY);
 
-				if (sourceFD == -1) 
-				{ 
-				    perror("open()"); 
-				    exit(1);
-				}
+	                    if (sourceFD == -1) 
+			    { 
+			        perror("open()"); 
+			        exit(1);
+			    }
 				
-				else 
-			        {
-			            int result = dup2(sourceFD, 0);
-			            if (result == -1) { 
-				        perror("dup2_stdin"); 
-					exit(2);
-				    }	
-				}
+			    else 
+			    {
+			        int result = dup2(sourceFD, 0);
+			        if (result == -1) 
+				{ 
+			            perror("dup2_stdin"); 
+			            exit(2);
+				}	
+		            }	
 
 			}
 
@@ -194,70 +228,51 @@ void main()
 			execute(args);
 			perror("Exec failure");
 	        }
-	        default: {
+	        default: 
+		{
 	                //BG Process
 		        if (userInput[lastCharIndex] == '&')
 			{
+			    addDynArr(pidArray, spawnPid);
 			    //print pid of child process
 			    printf("background pid is %d\n", spawnPid); 
-		            //doesn't wait for termination
-			    childPid = waitpid(spawnPid, &childExitMethod, WNOHANG);
+
 			}
 			//FG Process
 			else
 			{
 	                    //waits for child process to terminate
 	                    childPid = waitpid(spawnPid, &childExitMethod, 0);
+                            if (childPid == -1)
+			    {
+			        perror("wait failed");
+			    }
 			}
-			//checks for wait failure
-			if (childPid == -1)
-			{
-			    perror("wait failed");
-			}
-			//check if child process terminated normally
-	                if (WIFEXITED(childExitMethod))
-			{
-		                lastExitStatus = WEXITSTATUS(childExitMethod);
-			        exitType = 0;
-			}
-
-			//checks for signal termination of child
-			if (WIFSIGNALED(childExitMethod) != 0)
-			{
-			    lastExitStatus = WTERMSIG(childExitMethod);
-			    exitType = 1;
-			}
-			    
 	        }
 	    }
 	}
     }
 }
 
-//prompt() --  displays the command line prompt
-void prompt()
-{
-    printf(": ");
-    fflush(stdout);
-}
-
 
 //getUserInput() -- gets user input from stdin, and returns a string
-char* getUserInput()
+char* prompt()
 {
-
-    char* inputBuffer = NULL;
     int numChars = -1;
-    size_t bufferSize = 0;
-
-    numChars = getline(&inputBuffer, &bufferSize, stdin);
-    if (numChars == -1)
+    char* inputBuffer; 
+    do
     {
-        clearerr(stdin);
-    }
-    char* pidReplace = replacePid(inputBuffer);
-    return pidReplace;
+        printf(": ");
+        fflush(stdout);
 
+        size_t bufferSize = 0;
+        inputBuffer = NULL;
+
+        numChars = getline(&inputBuffer, &bufferSize, stdin);
+	
+    } while (numChars < 2);
+
+    return inputBuffer; 
 }
 
 
@@ -287,16 +302,22 @@ void changeDir(char* path)
 
 
 //getStatus() -- returns exit code or signel number of most recently terminated child process
-void getStatus(int lastExitStatus, int exitType)
+void getStatus(int childExitMethod)
 {
-    if (exitType == 0)
+    int exitStatus;
+    //check if child process terminated normally
+    if (WIFEXITED(childExitMethod))
     {
-        printf("exit value %d\n", lastExitStatus);
+        exitStatus = WEXITSTATUS(childExitMethod);
+	printf("exit value %d\n", exitStatus);
         fflush(stdout);
+
     }
-    else
+    //checks for signal termination of child
+    if (WIFSIGNALED(childExitMethod))
     {
-        printf("terminated by signal %d", lastExitStatus);
+        exitStatus = WTERMSIG(childExitMethod);
+        printf("terminated by signal %d\n", exitStatus);
 	fflush(stdout);
     }
 }
@@ -311,6 +332,7 @@ void execute(char** argv)
     }
 }
 
+//variable expansion for $$
 char* replacePid(char* text)
 {
     pid_t currentPid = getpid();
