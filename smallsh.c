@@ -9,13 +9,16 @@
 #include <math.h>
 #include "dynArray.h"
 
-char* prompt();
 void exitShell();
 void changeDir(char*);
 void getStatus(int);
 void execute(char**);
 char* replacePid(char*);
-void catchIgn();
+void prompt();
+char* getUserInput();
+void catchSTP();
+
+int stopped = 1;
 
 void main()
 {
@@ -33,10 +36,11 @@ void main()
 
     //sig stp
     SIGSTP_action.sa_handler = catchSTP;
-    sigfillset(&SIGSTOP_action.sa_mask);
-    SIGSTOP_action.sa_flags = 0;
+    sigfillset(&SIGSTP_action.sa_mask);
+    SIGSTP_action.sa_flags = 0;
+    sigaction(SIGTSTP, &SIGSTP_action, NULL);
     
- 
+    //dynamic array for storing pids
     DynArr* pidArray = newDynArr(5);
 
     // string for storing user input and tokenizing
@@ -74,7 +78,7 @@ void main()
 	}
 	//
 	//stores user input
-        userInput = prompt();
+	userInput = getUserInput();
         userInput = replacePid(userInput);
     
 
@@ -104,7 +108,7 @@ void main()
 	//checks for built in commands
         if (strcmp(*args, exitText) == 0)
         {
-            exitShell();
+            exitShell(pidArray);
         }
 	else if (strcmp(*args, changeDirText) == 0)
 	{
@@ -125,12 +129,13 @@ void main()
 	    {
 	        case -1: { perror("Process fork() failed!\n"); }	
 	        case 0: {
+
                         INT_action.sa_handler = SIG_DFL;
                         sigaction(SIGINT, &INT_action, NULL);
 
 			//perform redirection
 			//redirection for BG process with no user specified redirection
-			if (userInput[lastCharIndex] == '&')
+			if (userInput[lastCharIndex] == '&' && stopped == 1)
 			{
 			    INT_action.sa_handler = SIG_IGN;
 			    sigaction(SIGINT, &INT_action, NULL);
@@ -231,7 +236,7 @@ void main()
 	        default: 
 		{
 	                //BG Process
-		        if (userInput[lastCharIndex] == '&')
+		        if (userInput[lastCharIndex] == '&'  && stopped == 1)
 			{
 			    addDynArr(pidArray, spawnPid);
 			    //print pid of child process
@@ -254,31 +259,53 @@ void main()
     }
 }
 
+//displays the command prompt
+void prompt()
+{
+    printf(": ");
+    fflush(stdout);
+}
+
+
 
 //getUserInput() -- gets user input from stdin, and returns a string
-char* prompt()
+char* getUserInput()
 {
-    int numChars = -1;
-    char* inputBuffer; 
-    do
-    {
-        printf(": ");
-        fflush(stdout);
+    int numChars;
+    char* inputBuffer = NULL;
+    size_t bufferSize = 0;
 
-        size_t bufferSize = 0;
-        inputBuffer = NULL;
+    while (1)
+    {
+        prompt();
+	
+        numChars = -1;
 
         numChars = getline(&inputBuffer, &bufferSize, stdin);
-	
-    } while (numChars < 2);
 
+        if (numChars < 2)
+        {
+            clearerr(stdin);
+        }
+
+        else
+	{
+	    break;
+	}
+    }	
     return inputBuffer; 
 }
 
 
 //exits smallsh
-void exitShell()
+void exitShell(DynArr* pArray)
 {
+
+    //loops through the pid array kill off remaining processes
+    for (int i = 0; i < sizeDynArr(pArray); i++)
+    {
+        kill(getDynArr(pArray, i), SIGKILL);
+    }
     exit(0);
 }
 
@@ -349,4 +376,21 @@ char* replacePid(char* text)
 
     return buffer;
 
+}
+
+
+void catchSTP(int signal)
+{
+    char* startMessage = "\nEntering foreground only mode (& is now ignored)\n";
+    char* endMessage = "\nExiting foreground-only mode\n";
+    if (stopped == 1)
+    {
+        write(1, startMessage, 50);
+	stopped = 0;
+    }
+    else 
+    {
+        write(1, endMessage, 30);
+	stopped = 1;
+    }
 }
