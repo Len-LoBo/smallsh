@@ -1,9 +1,9 @@
 #compiler variables
-CC=gcc -std=c99
+CC=gcc -std=gnu99
 CFLAGS=-c -g
 
-smallsh: smallsh.o
-	$(CC) *.o -o smallsh 
+smallsh: smallsh.o dynArray.o
+	$(CC) *.o -o smallsh -lm 
 
 smallsh.o: smallsh.c
 	$(CC) $(CFLAGS) smallsh.c
