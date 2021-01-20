@@ -1,5 +1,5 @@
 Program: smallsh 
-Description: A shell written in C with a limited number of built in commands.  Non-built in commands are passed to the OS.
+Description: A shell written in C with a limited number of built in commands.  Non-built in commands are simply passed to the OS.
 
 Instructions For Command Line Compilation
 ----------------------------------------------------
